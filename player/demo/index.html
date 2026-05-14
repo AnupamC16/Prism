@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Prism EME/MSE Demo</title>
+  <style>
+    body {
+      background-color: #0d1117;
+      color: #c9d1d9;
+      font-family: 'Courier New', Courier, monospace;
+      margin: 0;
+      padding: 20px;
+    }
+    h1, h2, h3 { color: #58a6ff; }
+    .container {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .section {
+      background-color: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 20px;
+    }
+    .status-indicator {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background-color: #ff7b72;
+      margin-right: 8px;
+    }
+    .status-indicator.ok { background-color: #3fb950; }
+    .input-group {
+      margin-bottom: 15px;
+    }
+    label {
+      display: inline-block;
+      width: 120px;
+    }
+    input, select, textarea {
+      background-color: #0d1117;
+      color: #c9d1d9;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      padding: 8px;
+      font-family: inherit;
+    }
+    input[type="text"], select { width: 300px; }
+    textarea { width: 100%; height: 60px; margin-top: 10px; resize: vertical; }
+    button {
+      background-color: #238636;
+      color: #ffffff;
+      border: 1px solid #2ea043;
+      border-radius: 6px;
+      padding: 8px 16px;
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: bold;
+      transition: background-color 0.2s;
+    }
+    button:hover { background-color: #2ea043; }
+    video {
+      width: 100%;
+      max-width: 800px;
+      background-color: #000;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      display: block;
+      margin-top: 15px;
+    }
+    #event-log {
+      background-color: #010409;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      padding: 10px;
+      height: 300px;
+      overflow-y: auto;
+      font-size: 0.9em;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .log-time { color: #8b949e; }
+    .log-event { color: #79c0ff; font-weight: bold; }
+    .controls-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-top: 15px;
+    }
+    .badges {
+      display: flex;
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    .badge {
+      display: flex;
+      align-items: center;
+      font-size: 0.9em;
+    }
+  </style>
+  <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+</head>
+<body>
+
+<div class="container">
+  <h1>Prism OTT Manifest & DRM Demo</h1>
+  
+  <div class="badges">
+    <div class="badge">
+      <span class="status-indicator" id="status-api"></span> API Base Reachable
+    </div>
+    <div class="badge">
+      <span class="status-indicator" id="status-token"></span> Token Issued
+    </div>
+    <div class="badge">
+      <span class="status-indicator" id="status-license"></span> License Received
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>1. Configuration</h2>
+    <div class="input-group">
+      <label for="api-base">API Base URL:</label>
+      <input type="text" id="api-base" value="http://localhost:8080">
+      <button onclick="checkApiHealth()">Check API</button>
+    </div>
+    <div class="input-group">
+      <label for="asset-id">Asset ID:</label>
+      <input type="text" id="asset-id" value="test-asset-001">
+    </div>
+    <button onclick="issueToken()">Issue Token</button>
+    <textarea id="jwt-token" placeholder="JWT Token will appear here..." readonly></textarea>
+  </div>
+
+  <div class="section">
+    <h2>2. Player</h2>
+    <div class="input-group">
+      <label for="drm-type">DRM Type:</label>
+      <select id="drm-type">
+        <option value="none">None</option>
+        <option value="widevine" selected>Widevine</option>
+        <option value="fairplay">FairPlay</option>
+        <option value="playready">PlayReady</option>
+      </select>
+    </div>
+    <div class="controls-row">
+      <button onclick="loadPlayer()">Load Manifest</button>
+      <button onclick="manualEMEDemo()" style="background-color: #1f6feb; border-color: #388bfd;">Manual EME Demo</button>
+    </div>
+    <video id="video-player" controls></video>
+  </div>
+
+  <div class="section">
+    <h2>3. Event Log</h2>
+    <button onclick="clearLog()" style="margin-bottom: 10px; background-color: #21262d; border-color: #363b42;">Clear Log</button>
+    <div id="event-log"></div>
+  </div>
+</div>
+
+<script>
+  let currentToken = "";
+  let dashPlayer = null;
+
+  function log(eventName, details) {
+    const logBox = document.getElementById('event-log');
+    const time = new Date().toISOString().split('T')[1].substring(0, 12);
+    const detailStr = typeof details === 'object' ? JSON.stringify(details) : details;
+    const entry = document.createElement('div');
+    entry.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-event">${eventName}</span>: ${detailStr || ''}`;
+    logBox.appendChild(entry);
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+
+  function clearLog() {
+    document.getElementById('event-log').innerHTML = '';
+  }
+
+  async function checkApiHealth() {
+    const apiBase = document.getElementById('api-base').value;
+    try {
+      const res = await fetch(`${apiBase}/health`);
+      if (res.ok) {
+        document.getElementById('status-api').classList.add('ok');
+        log('API_HEALTH', 'Reachable');
+      } else {
+        document.getElementById('status-api').classList.remove('ok');
+        log('API_HEALTH', 'Failed');
+      }
+    } catch (e) {
+      document.getElementById('status-api').classList.remove('ok');
+      log('API_HEALTH', e.message);
+    }
+  }
+
+  async function issueToken() {
+    const apiBase = document.getElementById('api-base').value;
+    const assetID = document.getElementById('asset-id').value;
+    try {
+      log('TOKEN_REQUEST', `Requesting for asset: ${assetID}`);
+      const res = await fetch(`${apiBase}/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ asset_id: assetID, viewer_id: "demo-viewer", ttl: 3600 })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      currentToken = data.token || data.jwt;
+      document.getElementById('jwt-token').value = currentToken;
+      document.getElementById('status-token').classList.add('ok');
+      log('TOKEN_ISSUED', 'Success');
+    } catch (e) {
+      document.getElementById('status-token').classList.remove('ok');
+      log('TOKEN_ERROR', e.message);
+    }
+  }
+
+  function loadPlayer() {
+    const apiBase = document.getElementById('api-base').value;
+    const assetID = document.getElementById('asset-id').value;
+    const drmType = document.getElementById('drm-type').value;
+    const video = document.getElementById('video-player');
+
+    if (dashPlayer) {
+      dashPlayer.destroy();
+    }
+    
+    log('PLAYER_LOAD', `Initializing dash.js for asset: ${assetID}`);
+    dashPlayer = dashjs.MediaPlayer().create();
+    
+    const manifestUrl = `${apiBase}/manifest/dash/${assetID}`;
+    
+    if (drmType !== 'none') {
+      let protData = {};
+      if (drmType === 'widevine') {
+        protData["com.widevine.alpha"] = {
+          serverURL: `${apiBase}/license/widevine`,
+          httpRequestHeaders: {
+            "X-DRM-Token": currentToken,
+            "X-Asset-ID": assetID
+          }
+        };
+      } else if (drmType === 'fairplay') {
+        protData["com.apple.fps.1_0"] = {
+          serverURL: `${apiBase}/license/fairplay`,
+          httpRequestHeaders: {
+            "X-DRM-Token": currentToken,
+            "X-Asset-ID": assetID
+          }
+        };
+      } else if (drmType === 'playready') {
+        protData["com.microsoft.playready"] = {
+          serverURL: `${apiBase}/license/playready`,
+          httpRequestHeaders: {
+            "X-DRM-Token": currentToken,
+            "X-Asset-ID": assetID
+          }
+        };
+      }
+      log('DRM_CONFIG', protData);
+      dashPlayer.setProtectionData(protData);
+    }
+
+    dashPlayer.on(dashjs.MediaPlayer.events.KEY_SESSION_CREATED, () => log('KEY_SESSION_CREATED', ''));
+    dashPlayer.on(dashjs.MediaPlayer.events.KEY_MESSAGE, (e) => log('KEY_MESSAGE', `type: ${e.messageType}`));
+    dashPlayer.on(dashjs.MediaPlayer.events.KEY_STATUSES_CHANGED, () => {
+      log('KEY_STATUSES_CHANGED', 'License successfully negotiated');
+      document.getElementById('status-license').classList.add('ok');
+    });
+    dashPlayer.on(dashjs.MediaPlayer.events.KEY_ERROR, (e) => log('KEY_ERROR', e.error));
+    dashPlayer.on(dashjs.MediaPlayer.events.PROTECTION_CREATED, () => log('PROTECTION_CREATED', ''));
+    
+    dashPlayer.initialize(video, manifestUrl, true);
+  }
+
+  async function manualEMEDemo() {
+    log('MANUAL_EME', 'Starting explicit EME/MSE integration demo');
+    const video = document.getElementById('video-player');
+    const apiBase = document.getElementById('api-base').value;
+    const assetID = document.getElementById('asset-id').value;
+    
+    if (!currentToken) {
+      log('MANUAL_EME_ERROR', 'Please issue a token first');
+      return;
+    }
+
+    const config = [{
+      initDataTypes: ['cenc'],
+      videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"' }]
+    }];
+
+    try {
+      log('REQUEST_MEDIA_KEY_SYSTEM_ACCESS', 'com.widevine.alpha');
+      const keySystemAccess = await navigator.requestMediaKeySystemAccess('com.widevine.alpha', config);
+      
+      log('CREATE_MEDIA_KEYS', '');
+      const mediaKeys = await keySystemAccess.createMediaKeys();
+      await video.setMediaKeys(mediaKeys);
+      
+      const session = mediaKeys.createSession();
+      log('SESSION_CREATED', session.sessionId);
+      
+      session.addEventListener('message', async (event) => {
+        log('ENCRYPTED_MESSAGE', `Got keymessage, size: ${event.message.byteLength}`);
+        try {
+          const res = await fetch(`${apiBase}/license/widevine`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/octet-stream',
+              'X-DRM-Token': currentToken,
+              'X-Asset-ID': assetID
+            },
+            body: event.message
+          });
+          
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          log('LICENSE_FETCHED', 'Received license payload');
+          
+          const license = await res.arrayBuffer();
+          await session.update(license);
+          log('LICENSE_UPDATED', 'Session updated successfully');
+          document.getElementById('status-license').classList.add('ok');
+        } catch (e) {
+          log('LICENSE_FETCH_ERROR', e.message);
+        }
+      });
+      
+      session.addEventListener('keystatuseschange', () => {
+        log('KEY_STATUSES_CHANGE', 'Keys are now usable');
+      });
+
+      // Dummy initData to trigger the message event in this manual demo
+      const initData = new Uint8Array([0x00, 0x00, 0x00, 0x24, 0x70, 0x73, 0x73, 0x68, 0x00, 0x00, 0x00, 0x00, 0xed, 0xef, 0x8b, 0xa9, 0x79, 0xd6, 0x4a, 0xce, 0xa3, 0xc8, 0x27, 0xdc, 0xd5, 0x1d, 0x21, 0xed, 0x00, 0x00, 0x00, 0x04, 0x08, 0x01, 0x12, 0x00]);
+      log('GENERATE_REQUEST', 'Triggering license request with dummy PSSH');
+      await session.generateRequest('cenc', initData);
+
+    } catch (e) {
+      log('MANUAL_EME_ERROR', e.message);
+    }
+  }
+</script>
+</body>
+</html>

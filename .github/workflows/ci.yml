@@ -1,0 +1,244 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Test with race detector and coverage
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          if-no-files-found: error
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: v1.57.2
+          args: --timeout=5m --config=.golangci.yml
+
+  bench:
+    name: bench
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Run token validation benchmark
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -bench=BenchmarkTokenValidate -benchtime=5s -count=3 ./internal/service/test/ | tee bench_output.txt
+
+      - name: Upload benchmark output
+        uses: actions/upload-artifact@v4
+        with:
+          name: token-validation-benchmark
+          path: bench_output.txt
+          if-no-files-found: error
+
+  load-test:
+    name: load-test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Prepare CI environment
+        run: |
+          cat > deploy/.env.ci <<'EOF'
+          PORT=:8080
+          LOG_LEVEL=info
+          REDIS_URL=redis://redis:6379/0
+          JWT_SECRET=test-secret-32-chars-minimum-len!
+          TOKEN_TTL_SECONDS=3600
+          WIDEVINE_URL=http://prism-mock-license:8080/license
+          WIDEVINE_API_KEY=ci-widevine-api-key
+          FAIRPLAY_URL=http://prism-mock-license:8080/license
+          FAIRPLAY_CERT_URL=http://prism-mock-license:8080/cert
+          FAIRPLAY_SECRET=ci-fairplay-secret
+          PLAYREADY_URL=http://prism-mock-license:8080/license
+          CLOUDFRONT_DOMAIN=cdn.example.test
+          CLOUDFRONT_KEY_PAIR_ID=KCIEXAMPLE
+          CLOUDFRONT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
+          MIIBVAIBADANBgkqhkiG9w0BAQEFAASCAT4wggE6AgEAAkEAqjPwLqKGxkFi53dv
+          c8ywjTPKKnyFqrFr1kwVvNJzUR+zAm/gFnyVYC0lJMvV5cR41kO7ZvEZU72A42Im
+          idNpZQIDAQABAkAqNGTbe4vF/5LB6NjnMxuYd/4qmOQgVoxyAD3nq5vSwozDM33i
+          PJKWnuau4PXqlQBWBNWdVWqhLdFUpXk2FPfhAiEA32k79D9vZmUwvldTBz0PoIaD
+          8+vxN/Y8w4MqxLBwG/kCIQDDB8SsUB70nOr1Vo8d1xWNnG5z8Lhk9JTpQYxvKtfb
+          zQIgCEs+1413VETTb22MfotMxjfYNDkBJoO0s8lt0AmAz/kCID+1KemfwnzlRVsf
+          C2EUAVZg4zO8Tn+r5XjMkLM/q4OBAiEA2h349/JHm08Sor0Ude2tM0yJ+6XauucI
+          iTl48eFE6iQ=
+          -----END PRIVATE KEY-----"
+          MANIFEST_CACHE_TTL=30
+          LICENSE_CACHE_TTL=300
+          CERT_CACHE_TTL=3600
+          VERSION=1.0.0
+          EOF
+
+      - name: Start Redis
+        run: docker compose --env-file deploy/.env.ci -p prismci -f deploy/docker-compose.yml up -d redis
+
+      - name: Start mock DRM license server
+        run: |
+          docker run -d \
+            --name prism-mock-license \
+            --network prismci_prism-net \
+            --network-alias prism-mock-license \
+            python:3.12-alpine \
+            sh -c "cat > /tmp/server.py <<'PY'
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+          class Handler(BaseHTTPRequestHandler):
+              def _send(self, body=b'ci-license-bytes', content_type='application/octet-stream'):
+                  self.send_response(200)
+                  self.send_header('Content-Type', content_type)
+                  self.send_header('Content-Length', str(len(body)))
+                  self.end_headers()
+                  self.wfile.write(body)
+
+              def do_GET(self):
+                  if self.path == '/cert':
+                      self._send(b'ci-fairplay-cert')
+                  else:
+                      self._send()
+
+              def do_POST(self):
+                  _ = self.rfile.read(int(self.headers.get('Content-Length', '0') or '0'))
+                  self._send()
+
+              def log_message(self, *_args):
+                  return
+
+          HTTPServer(('0.0.0.0', 8080), Handler).serve_forever()
+          PY
+          python /tmp/server.py"
+
+      - name: Start Prism
+        run: docker compose --env-file deploy/.env.ci -p prismci -f deploy/docker-compose.yml up -d prism
+
+      - name: Wait for health
+        run: |
+          deadline=$((SECONDS + 60))
+          until curl -f http://localhost:8080/health; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              docker compose --env-file deploy/.env.ci -p prismci -f deploy/docker-compose.yml logs --tail=100 prism
+              exit 1
+            fi
+            sleep 1
+          done
+          exit 0
+
+      - name: Run k6 load test
+        env:
+          PRISM_URL: http://localhost:8080
+        run: k6 run scripts/load_test.js
+
+      - name: Upload load test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-test-report
+          path: |
+            scripts/load_test_report.html
+            summary.json
+          if-no-files-found: ignore
+
+      - name: Show Prism logs on failure
+        if: failure()
+        run: docker compose --env-file deploy/.env.ci -p prismci -f deploy/docker-compose.yml logs --tail=100 prism
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f prism-mock-license || true
+          docker compose --env-file deploy/.env.ci -p prismci -f deploy/docker-compose.yml down -v
+
+  docker-build:
+    name: docker-build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: prism:test
+
+      - name: Smoke test image
+        run: |
+          docker run --rm \
+            -e JWT_SECRET=test-secret-32-chars-minimum-len! \
+            -e REDIS_URL=redis://localhost:6379/0 \
+            prism:test --version | tee docker_smoke_output.txt
+          grep -q '^prism ' docker_smoke_output.txt
