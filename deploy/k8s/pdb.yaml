@@ -1,0 +1,15 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: prism
+  namespace: prism
+  labels:
+    app.kubernetes.io/name: prism
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: prism
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prism
+      app.kubernetes.io/component: api
