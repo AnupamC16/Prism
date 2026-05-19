@@ -77,7 +77,7 @@ func NewRouter(
 		Recovery(logger),
 		RequestID(),
 		RequestLogger(logger),
-		Timeout(10*time.Minute),
+		Timeout(60*time.Minute),
 		CORS(),
 	)
 }
