@@ -21,13 +21,29 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # Stage 2 — Runtime
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates tzdata wget \
-  && adduser -D -u 10001 prism
+ARG SHAKA_PACKAGER_VERSION=3.4.2
+
+RUN apk add --no-cache ca-certificates tzdata wget ffmpeg \
+  && adduser -D -u 10001 prism \
+  && mkdir -p /data/assets \
+  && chown -R prism:prism /data
+
+RUN set -eux; \
+  arch="$(uname -m)"; \
+  case "$arch" in \
+    x86_64) shaka_arch="x64" ;; \
+    aarch64) shaka_arch="arm64" ;; \
+    *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+  esac; \
+  wget -O /usr/local/bin/packager "https://github.com/shaka-project/shaka-packager/releases/download/v${SHAKA_PACKAGER_VERSION}/packager-linux-${shaka_arch}"; \
+  chmod +x /usr/local/bin/packager; \
+  /usr/local/bin/packager --version
 
 WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /build/prism /app/prism
+COPY player/demo /app/player/demo
 
 # Copy CA certs explicitly for HTTPS to DRM servers
 RUN update-ca-certificates

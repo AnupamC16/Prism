@@ -10,6 +10,7 @@ import (
 	"github.com/anupam-chopra/prism/internal/cdn"
 	"github.com/anupam-chopra/prism/internal/config"
 	"github.com/anupam-chopra/prism/internal/manifest"
+	"github.com/anupam-chopra/prism/internal/media"
 	"github.com/anupam-chopra/prism/internal/model"
 )
 
@@ -61,18 +62,32 @@ func (s *ManifestService) GetDASH(ctx context.Context, req *model.ManifestReques
 
 func (s *ManifestService) get(ctx context.Context, manifestType string, req *model.ManifestRequest, gen manifest.GeneratorI) ([]byte, error) {
 	key := cache.ManifestKey(manifestType, req.AssetID, req.FilterHash())
+	useCache := !((manifestType == "hls" && req.DRM == "" && media.HasLocalHLS(s.cfg.MediaRoot, req.AssetID)) ||
+		(manifestType == "hls" && req.DRM == media.DRMModeFairPlay && media.HasLocalFairPlayHLS(s.cfg.MediaRoot, req.AssetID)) ||
+		(manifestType == "dash" && req.DRM == media.DRMModeClearKey && media.HasLocalClearKeyDASH(s.cfg.MediaRoot, req.AssetID)) ||
+		(manifestType == "dash" && req.DRM == media.DRMModeWidevine && media.HasLocalDRMDASH(s.cfg.MediaRoot, req.AssetID)) ||
+		(manifestType == "dash" && req.DRM == "" && media.HasLocalDASH(s.cfg.MediaRoot, req.AssetID)))
 
-	if cached, err := s.cache.Get(ctx, key); err == nil {
-		s.logger.DebugContext(ctx, "manifest cache hit",
+	if useCache {
+		if cached, err := s.cache.Get(ctx, key); err == nil {
+			s.logger.DebugContext(ctx, "manifest cache hit",
+				"asset_id", req.AssetID,
+				"type", manifestType,
+			)
+			return cached, nil
+		} else if err != cache.ErrCacheMiss {
+			s.logger.WarnContext(ctx, "cache get error",
+				"asset_id", req.AssetID,
+				"type", manifestType,
+				"error", err,
+			)
+		}
+	}
+
+	if !useCache {
+		s.logger.DebugContext(ctx, "serving local manifest without cache",
 			"asset_id", req.AssetID,
 			"type", manifestType,
-		)
-		return cached, nil
-	} else if err != cache.ErrCacheMiss {
-		s.logger.WarnContext(ctx, "cache get error",
-			"asset_id", req.AssetID,
-			"type", manifestType,
-			"error", err,
 		)
 	}
 
@@ -86,19 +101,29 @@ func (s *ManifestService) get(ctx context.Context, manifestType string, req *mod
 		return nil, fmt.Errorf("rewrite CDN URIs for asset %q: %w", req.AssetID, err)
 	}
 
-	if err := s.cache.Set(ctx, key, manifestBytes, time.Duration(s.cfg.ManifestCacheTTL)*time.Second); err != nil {
-		s.logger.WarnContext(ctx, "failed to cache manifest",
-			"asset_id", req.AssetID,
-			"type", manifestType,
-			"error", err,
-		)
+	if useCache {
+		if err := s.cache.Set(ctx, key, manifestBytes, time.Duration(s.cfg.ManifestCacheTTL)*time.Second); err != nil {
+			s.logger.WarnContext(ctx, "failed to cache manifest",
+				"asset_id", req.AssetID,
+				"type", manifestType,
+				"error", err,
+			)
+		}
 	}
 
-	s.logger.InfoContext(ctx, "manifest cache miss — generated",
-		"asset_id", req.AssetID,
-		"type", manifestType,
-		"size_bytes", len(manifestBytes),
-	)
+	if useCache {
+		s.logger.InfoContext(ctx, "manifest cache miss — generated",
+			"asset_id", req.AssetID,
+			"type", manifestType,
+			"size_bytes", len(manifestBytes),
+		)
+	} else {
+		s.logger.InfoContext(ctx, "local manifest served",
+			"asset_id", req.AssetID,
+			"type", manifestType,
+			"size_bytes", len(manifestBytes),
+		)
+	}
 
 	return manifestBytes, nil
 }

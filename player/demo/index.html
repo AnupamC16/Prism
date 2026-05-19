@@ -101,14 +101,77 @@
       align-items: center;
       font-size: 0.9em;
     }
+    .steps {
+      background-color: #0d1117;
+      border-left: 3px solid #58a6ff;
+      padding: 12px 16px;
+      margin-bottom: 20px;
+    }
+    .steps ol {
+      margin: 0;
+      padding-left: 20px;
+    }
+    .steps li {
+      margin: 4px 0;
+    }
+    .steps code, .inspector code {
+      background-color: #161b22;
+      padding: 2px 6px;
+      border-radius: 3px;
+      color: #f0883e;
+    }
+    #manifest-output {
+      background-color: #010409;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      padding: 10px;
+      max-height: 350px;
+      overflow: auto;
+      font-size: 0.85em;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .highlight-pssh { background-color: #1f6feb; color: #ffffff; padding: 1px 3px; border-radius: 2px; }
+    .highlight-key  { background-color: #d29922; color: #0d1117; padding: 1px 3px; border-radius: 2px; }
+    .highlight-cp   { background-color: #238636; color: #ffffff; padding: 1px 3px; border-radius: 2px; }
+    .legend {
+      display: flex;
+      gap: 12px;
+      margin: 10px 0;
+      font-size: 0.85em;
+    }
+    .legend span {
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+    .verdict {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 4px;
+      font-weight: bold;
+    }
+    .verdict.pass { background-color: #1a4d2a; color: #3fb950; border: 1px solid #3fb950; }
+    .verdict.fail { background-color: #4d1a1a; color: #ff7b72; border: 1px solid #ff7b72; }
   </style>
   <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
 <body>
 
 <div class="container">
   <h1>Prism OTT Manifest & DRM Demo</h1>
-  
+
+  <div class="steps">
+    <strong>Interview demo flow:</strong>
+    <ol>
+      <li>Pick a <code>DRM Type</code> (ClearKey, Widevine, FairPlay).</li>
+      <li>Choose a video file and click <code>Upload &amp; Process</code>. FFmpeg transcodes 4 renditions; Shaka Packager encrypts and writes the manifest.</li>
+      <li>Click <code>Inspect Manifest</code> to see the real <code>&lt;cenc:pssh&gt;</code> (Widevine/PlayReady) or <code>EXT-X-KEY skd://</code> (FairPlay) embedded by Shaka.</li>
+      <li>Click <code>Load Manifest</code> to play. Token issuance, EME challenge, license response, and key delivery are logged in step 4.</li>
+      <li>ClearKey plays fully in-browser. Widevine/FairPlay need real upstream DRM credentials in <code>.env</code>.</li>
+    </ol>
+  </div>
+
   <div class="badges">
     <div class="badge">
       <span class="status-indicator" id="status-api"></span> API Base Reachable
@@ -132,6 +195,11 @@
       <label for="asset-id">Asset ID:</label>
       <input type="text" id="asset-id" value="test-asset-001">
     </div>
+    <div class="input-group">
+      <label for="video-file">Video File:</label>
+      <input type="file" id="video-file" accept="video/*">
+      <button onclick="uploadVideo()">Upload & Process</button>
+    </div>
     <button onclick="issueToken()">Issue Token</button>
     <textarea id="jwt-token" placeholder="JWT Token will appear here..." readonly></textarea>
   </div>
@@ -141,10 +209,18 @@
     <div class="input-group">
       <label for="drm-type">DRM Type:</label>
       <select id="drm-type">
-        <option value="none">None</option>
-        <option value="widevine" selected>Widevine</option>
+        <option value="none" selected>None</option>
+        <option value="widevine">Widevine</option>
         <option value="fairplay">FairPlay</option>
         <option value="playready">PlayReady</option>
+        <option value="clearkey">ClearKey</option>
+      </select>
+    </div>
+    <div class="input-group">
+      <label for="stream-type">Stream Type:</label>
+      <select id="stream-type">
+        <option value="hls" selected>HLS</option>
+        <option value="dash">DASH</option>
       </select>
     </div>
     <div class="controls-row">
@@ -154,8 +230,26 @@
     <video id="video-player" controls></video>
   </div>
 
+  <div class="section inspector">
+    <h2>3. Manifest Inspector</h2>
+    <p style="margin: 0 0 10px 0; font-size: 0.9em; color: #8b949e;">
+      Fetches the packaged manifest from the server. Highlights the real DRM signaling Shaka Packager wrote — proving segments are actually encrypted, not stub-protected.
+    </p>
+    <div class="controls-row" style="margin-top: 0;">
+      <button onclick="inspectManifest()">Inspect Manifest</button>
+      <button onclick="copyManifest()" style="background-color: #21262d; border-color: #363b42;">Copy Raw</button>
+    </div>
+    <div class="legend">
+      <span class="highlight-pssh">&lt;cenc:pssh&gt; — Widevine/PlayReady protobuf</span>
+      <span class="highlight-key">EXT-X-KEY skd:// — FairPlay key URI</span>
+      <span class="highlight-cp">ContentProtection — CENC scheme</span>
+    </div>
+    <div id="manifest-verdict"></div>
+    <div id="manifest-output">Click <em>Inspect Manifest</em> after uploading.</div>
+  </div>
+
   <div class="section">
-    <h2>3. Event Log</h2>
+    <h2>4. Event Log</h2>
     <button onclick="clearLog()" style="margin-bottom: 10px; background-color: #21262d; border-color: #363b42;">Clear Log</button>
     <div id="event-log"></div>
   </div>
@@ -164,6 +258,7 @@
 <script>
   let currentToken = "";
   let dashPlayer = null;
+  let hlsPlayer = null;
 
   function log(eventName, details) {
     const logBox = document.getElementById('event-log');
@@ -177,6 +272,108 @@
 
   function clearLog() {
     document.getElementById('event-log').innerHTML = '';
+  }
+
+  let rawManifestText = '';
+
+  function manifestUrlForCurrentSelection() {
+    const apiBase = document.getElementById('api-base').value;
+    const assetID = document.getElementById('asset-id').value;
+    const drmType = document.getElementById('drm-type').value;
+
+    if (drmType === 'fairplay') {
+      return `${apiBase}/manifest/hls/${assetID}?drm=fairplay`;
+    }
+    if (drmType === 'widevine') {
+      return `${apiBase}/manifest/dash/${assetID}?drm=widevine`;
+    }
+    if (drmType === 'clearkey') {
+      return `${apiBase}/manifest/dash/${assetID}?drm=clearkey`;
+    }
+    const streamType = document.getElementById('stream-type').value;
+    return `${apiBase}/manifest/${streamType}/${assetID}`;
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  }
+
+  function highlightManifest(body, drmType) {
+    let html = escapeHtml(body);
+    // <cenc:pssh>...</cenc:pssh>
+    html = html.replace(/(&lt;cenc:pssh[\s\S]*?&lt;\/cenc:pssh&gt;)/g, '<span class="highlight-pssh">$1</span>');
+    // <ContentProtection ... />
+    html = html.replace(/(&lt;ContentProtection[^&]*?(?:\/&gt;|&gt;[\s\S]*?&lt;\/ContentProtection&gt;))/g, '<span class="highlight-cp">$1</span>');
+    // #EXT-X-KEY:...
+    html = html.replace(/(#EXT-X-KEY:[^\n]*)/g, '<span class="highlight-key">$1</span>');
+    return html;
+  }
+
+  function renderVerdict(body, drmType) {
+    const verdictEl = document.getElementById('manifest-verdict');
+    verdictEl.className = '';
+    verdictEl.innerHTML = '';
+    let pass = false;
+    let message = '';
+
+    if (drmType === 'widevine') {
+      pass = body.includes('<cenc:pssh>');
+      message = pass
+        ? 'PASS — Widevine/PlayReady PSSH boxes embedded by Shaka Packager. Segments are encrypted.'
+        : 'FAIL — No <cenc:pssh> found. Manifest was not packaged with Widevine.';
+    } else if (drmType === 'fairplay') {
+      pass = body.includes('EXT-X-KEY') && body.includes('skd://');
+      message = pass
+        ? 'PASS — FairPlay EXT-X-KEY with skd:// URI written by Shaka Packager. Segments are encrypted.'
+        : 'FAIL — No EXT-X-KEY skd:// URI found.';
+    } else if (drmType === 'clearkey') {
+      pass = body.includes('ContentProtection');
+      message = pass
+        ? 'PASS — CENC ContentProtection element present. ClearKey encryption active.'
+        : 'FAIL — No ContentProtection element found.';
+    } else {
+      pass = true;
+      message = 'No DRM selected — plain manifest served. Choose a DRM Type and re-inspect to see real protection signaling.';
+    }
+
+    verdictEl.classList.add('verdict', pass ? 'pass' : 'fail');
+    verdictEl.textContent = message;
+  }
+
+  async function inspectManifest() {
+    const url = manifestUrlForCurrentSelection();
+    const drmType = document.getElementById('drm-type').value;
+    const outEl = document.getElementById('manifest-output');
+    try {
+      log('MANIFEST_FETCH', url);
+      const res = await fetch(url);
+      const body = await res.text();
+      if (!res.ok) {
+        outEl.textContent = `HTTP ${res.status}\n${body}`;
+        document.getElementById('manifest-verdict').innerHTML = '';
+        return;
+      }
+      rawManifestText = body;
+      outEl.innerHTML = highlightManifest(body, drmType);
+      renderVerdict(body, drmType);
+      log('MANIFEST_FETCHED', `${body.length} bytes`);
+    } catch (e) {
+      outEl.textContent = `Error: ${e.message}`;
+      log('MANIFEST_FETCH_ERROR', e.message);
+    }
+  }
+
+  async function copyManifest() {
+    if (!rawManifestText) {
+      log('COPY_ERROR', 'Inspect a manifest first');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(rawManifestText);
+      log('MANIFEST_COPIED', `${rawManifestText.length} bytes to clipboard`);
+    } catch (e) {
+      log('COPY_ERROR', e.message);
+    }
   }
 
   async function checkApiHealth() {
@@ -208,53 +405,186 @@
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      currentToken = data.token || data.jwt;
+      currentToken = data?.data?.token || data?.token || data?.jwt || "";
+      if (!currentToken) {
+        throw new Error(data?.error?.message || 'Token response did not include a token');
+      }
       document.getElementById('jwt-token').value = currentToken;
       document.getElementById('status-token').classList.add('ok');
       log('TOKEN_ISSUED', 'Success');
+      return currentToken;
     } catch (e) {
       document.getElementById('status-token').classList.remove('ok');
       log('TOKEN_ERROR', e.message);
+      return "";
     }
   }
 
-  function loadPlayer() {
+  async function uploadVideo() {
     const apiBase = document.getElementById('api-base').value;
     const assetID = document.getElementById('asset-id').value;
     const drmType = document.getElementById('drm-type').value;
+    const fileInput = document.getElementById('video-file');
+    const file = fileInput.files[0];
+
+    if (!file) {
+      log('UPLOAD_ERROR', 'Choose a video file first');
+      return;
+    }
+
+    const form = new FormData();
+    if (assetID) form.append('asset_id', assetID);
+    if (drmType === 'clearkey' || drmType === 'widevine' || drmType === 'fairplay') {
+      form.append('drm', drmType);
+    }
+    form.append('file', file);
+
+    try {
+      log('UPLOAD_START', `${file.name} (${file.size} bytes) drm=${drmType || 'none'}`);
+      log('UPLOAD_PROCESSING', 'FFmpeg transcoding + Shaka packaging… this takes 1-3 min');
+      const res = await fetch(`${apiBase}/upload`, {
+        method: 'POST',
+        body: form
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+      document.getElementById('asset-id').value = data.data.asset_id;
+      const manifestPath = data.data.clearkey_dash_manifest || data.data.widevine_dash_manifest || data.data.fairplay_hls_manifest || data.data.hls_manifest;
+      log('UPLOAD_DONE', `asset_id=${data.data.asset_id} manifest=${manifestPath}`);
+      if (drmType === 'clearkey' || drmType === 'widevine') {
+        document.getElementById('stream-type').value = 'dash';
+        log('UPLOAD_AUTO_LOAD', 'Issuing token + loading DASH player');
+        await issueToken();
+      } else if (drmType === 'fairplay') {
+        document.getElementById('stream-type').value = 'hls';
+        log('UPLOAD_AUTO_LOAD', 'Issuing token + loading HLS player');
+        await issueToken();
+      } else {
+        log('UPLOAD_AUTO_LOAD', 'Loading plain HLS player');
+      }
+      loadPlayer();
+    } catch (e) {
+      log('UPLOAD_ERROR', e.message);
+    }
+  }
+
+  async function loadPlayer() {
+    const apiBase = document.getElementById('api-base').value;
+    const assetID = document.getElementById('asset-id').value;
+    const drmType = document.getElementById('drm-type').value;
+    const streamType = document.getElementById('stream-type').value;
     const video = document.getElementById('video-player');
 
     if (dashPlayer) {
       dashPlayer.destroy();
+      dashPlayer = null;
+    }
+    if (hlsPlayer) {
+      hlsPlayer.destroy();
+      hlsPlayer = null;
     }
     
-    log('PLAYER_LOAD', `Initializing dash.js for asset: ${assetID}`);
+    if (drmType === 'none') {
+      if (streamType === 'dash') {
+        const manifestUrl = `${apiBase}/manifest/dash/${assetID}`;
+        log('PLAYER_LOAD', `Loading DASH for asset: ${assetID}`);
+        dashPlayer = dashjs.MediaPlayer().create();
+        dashPlayer.on('error', (e) => log('DASH_ERROR', JSON.stringify(e.error || e)));
+        dashPlayer.on('playbackStarted', () => log('PLAYBACK_STARTED', 'Video is playing!'));
+        dashPlayer.initialize(video, manifestUrl, true);
+        return;
+      }
+
+      const manifestUrl = `${apiBase}/manifest/hls/${assetID}`;
+      log('PLAYER_LOAD', `Loading HLS for asset: ${assetID}`);
+      if (Hls.isSupported()) {
+        hlsPlayer = new Hls();
+        hlsPlayer.on(Hls.Events.MANIFEST_PARSED, () => {
+          log('HLS_MANIFEST_PARSED', manifestUrl);
+          video.play().catch(() => log('AUTOPLAY_BLOCKED', 'Press ▶ to play'));
+        });
+        hlsPlayer.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal) log('HLS_ERROR', `${data.type}: ${data.details}`);
+        });
+        hlsPlayer.loadSource(manifestUrl);
+        hlsPlayer.attachMedia(video);
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = manifestUrl;
+        video.play().catch((e) => log('AUTOPLAY_BLOCKED', e.message));
+      } else {
+        log('PLAYER_ERROR', 'This browser cannot play HLS');
+      }
+      return;
+    }
+
+    if (drmType === 'widevine') {
+      log('PLAYER_WARN', 'Widevine needs upstream license server credentials in .env — expect 502 unless configured. Use ClearKey for offline demo.');
+    }
+    if (drmType === 'fairplay') {
+      log('PLAYER_WARN', 'FairPlay only works on Safari/iOS. This browser will reject com.apple.fps key system.');
+    }
+
+    if (!currentToken) {
+      currentToken = await issueToken();
+      if (!currentToken) {
+        log('PLAYER_ERROR', 'Issue a DRM token first');
+        return;
+      }
+    }
+
+    let manifestUrl;
+    if (drmType === 'clearkey') {
+      manifestUrl = `${apiBase}/manifest/dash/${assetID}?drm=clearkey`;
+    } else if (drmType === 'widevine') {
+      manifestUrl = `${apiBase}/manifest/dash/${assetID}?drm=widevine`;
+    } else if (drmType === 'fairplay') {
+      manifestUrl = `${apiBase}/manifest/hls/${assetID}?drm=fairplay`;
+    } else {
+      manifestUrl = `${apiBase}/manifest/dash/${assetID}`;
+    }
+
+    log('PLAYER_LOAD', `Initializing dash.js for asset: ${assetID} url: ${manifestUrl}`);
     dashPlayer = dashjs.MediaPlayer().create();
-    
-    const manifestUrl = `${apiBase}/manifest/dash/${assetID}`;
-    
+
+    // Wire events before initialize — use string literals to avoid undefined event name errors
+    dashPlayer.on('error', (e) => log('DASH_ERROR', JSON.stringify(e.error || e)));
+    dashPlayer.on('manifestLoaded', () => log('MANIFEST_LOADED', manifestUrl));
+    dashPlayer.on('playbackStarted', () => log('PLAYBACK_STARTED', 'Video is playing!'));
+    dashPlayer.on('playbackError', (e) => log('PLAYBACK_ERROR', JSON.stringify(e)));
+    dashPlayer.on('licenseRequestComplete', (e) => {
+      if (e && e.error) {
+        log('LICENSE_ERROR', JSON.stringify(e.error));
+      } else {
+        log('LICENSE_OK', 'License acquired — keys usable');
+        document.getElementById('status-license').classList.add('ok');
+      }
+    });
+
+    // initialize first, then setProtectionData (dash.js requirement)
+    dashPlayer.initialize(video, manifestUrl, false);
+
     if (drmType !== 'none') {
       let protData = {};
       if (drmType === 'widevine') {
         protData["com.widevine.alpha"] = {
           serverURL: `${apiBase}/license/widevine`,
-          httpRequestHeaders: {
-            "X-DRM-Token": currentToken,
-            "X-Asset-ID": assetID
-          }
+          httpRequestHeaders: { "X-DRM-Token": currentToken, "X-Asset-ID": assetID }
         };
       } else if (drmType === 'fairplay') {
         protData["com.apple.fps.1_0"] = {
           serverURL: `${apiBase}/license/fairplay`,
-          httpRequestHeaders: {
-            "X-DRM-Token": currentToken,
-            "X-Asset-ID": assetID
-          }
+          httpRequestHeaders: { "X-DRM-Token": currentToken, "X-Asset-ID": assetID }
         };
       } else if (drmType === 'playready') {
         protData["com.microsoft.playready"] = {
           serverURL: `${apiBase}/license/playready`,
+          httpRequestHeaders: { "X-DRM-Token": currentToken, "X-Asset-ID": assetID }
+        };
+      } else if (drmType === 'clearkey') {
+        protData["org.w3.clearkey"] = {
+          serverURL: `${apiBase}/license/clearkey`,
           httpRequestHeaders: {
+            "Content-Type": "application/json",
             "X-DRM-Token": currentToken,
             "X-Asset-ID": assetID
           }
@@ -264,83 +594,100 @@
       dashPlayer.setProtectionData(protData);
     }
 
-    dashPlayer.on(dashjs.MediaPlayer.events.KEY_SESSION_CREATED, () => log('KEY_SESSION_CREATED', ''));
-    dashPlayer.on(dashjs.MediaPlayer.events.KEY_MESSAGE, (e) => log('KEY_MESSAGE', `type: ${e.messageType}`));
-    dashPlayer.on(dashjs.MediaPlayer.events.KEY_STATUSES_CHANGED, () => {
-      log('KEY_STATUSES_CHANGED', 'License successfully negotiated');
-      document.getElementById('status-license').classList.add('ok');
-    });
-    dashPlayer.on(dashjs.MediaPlayer.events.KEY_ERROR, (e) => log('KEY_ERROR', e.error));
-    dashPlayer.on(dashjs.MediaPlayer.events.PROTECTION_CREATED, () => log('PROTECTION_CREATED', ''));
-    
-    dashPlayer.initialize(video, manifestUrl, true);
+    dashPlayer.play();
   }
 
   async function manualEMEDemo() {
-    log('MANUAL_EME', 'Starting explicit EME/MSE integration demo');
+    const drmType = document.getElementById('drm-type').value;
+    log('MANUAL_EME', `Starting explicit EME/MSE integration demo (DRM: ${drmType})`);
     const video = document.getElementById('video-player');
     const apiBase = document.getElementById('api-base').value;
     const assetID = document.getElementById('asset-id').value;
-    
+
     if (!currentToken) {
       log('MANUAL_EME_ERROR', 'Please issue a token first');
       return;
     }
 
+    const isClearKey = drmType === 'clearkey';
+    const keySystem = isClearKey ? 'org.w3.clearkey' : 'com.widevine.alpha';
+    const licenseURL = isClearKey ? `${apiBase}/license/clearkey` : `${apiBase}/license/widevine`;
+    const contentType = isClearKey ? 'application/json' : 'application/octet-stream';
+
     const config = [{
-      initDataTypes: ['cenc'],
+      initDataTypes: [isClearKey ? 'keyids' : 'cenc'],
       videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"' }]
     }];
 
     try {
-      log('REQUEST_MEDIA_KEY_SYSTEM_ACCESS', 'com.widevine.alpha');
-      const keySystemAccess = await navigator.requestMediaKeySystemAccess('com.widevine.alpha', config);
-      
+      log('REQUEST_MEDIA_KEY_SYSTEM_ACCESS', keySystem);
+      const keySystemAccess = await navigator.requestMediaKeySystemAccess(keySystem, config);
+
       log('CREATE_MEDIA_KEYS', '');
       const mediaKeys = await keySystemAccess.createMediaKeys();
       await video.setMediaKeys(mediaKeys);
-      
+
       const session = mediaKeys.createSession();
-      log('SESSION_CREATED', session.sessionId);
-      
+      log('SESSION_CREATED', session.sessionId || '(new session)');
+
       session.addEventListener('message', async (event) => {
         log('ENCRYPTED_MESSAGE', `Got keymessage, size: ${event.message.byteLength}`);
         try {
-          const res = await fetch(`${apiBase}/license/widevine`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/octet-stream',
-              'X-DRM-Token': currentToken,
-              'X-Asset-ID': assetID
-            },
-            body: event.message
-          });
-          
+          const headers = {
+            'Content-Type': contentType,
+            'X-DRM-Token': currentToken,
+            'X-Asset-ID': assetID
+          };
+          let body = event.message;
+          if (isClearKey) {
+            // ClearKey message is already JSON {kids:[...]}
+            body = event.message;
+            headers['Content-Type'] = 'application/json';
+          }
+          const res = await fetch(licenseURL, { method: 'POST', headers, body });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          log('LICENSE_FETCHED', 'Received license payload');
-          
+          log('LICENSE_FETCHED', `Received license from ${licenseURL}`);
           const license = await res.arrayBuffer();
           await session.update(license);
-          log('LICENSE_UPDATED', 'Session updated successfully');
+          log('LICENSE_UPDATED', 'Session updated — keys are usable');
           document.getElementById('status-license').classList.add('ok');
         } catch (e) {
           log('LICENSE_FETCH_ERROR', e.message);
         }
       });
-      
+
       session.addEventListener('keystatuseschange', () => {
-        log('KEY_STATUSES_CHANGE', 'Keys are now usable');
+        const statuses = [];
+        session.keyStatuses.forEach((status, kid) => statuses.push(`${status}`));
+        log('KEY_STATUSES_CHANGE', statuses.join(', ') || 'keys usable');
       });
 
-      // Dummy initData to trigger the message event in this manual demo
-      const initData = new Uint8Array([0x00, 0x00, 0x00, 0x24, 0x70, 0x73, 0x73, 0x68, 0x00, 0x00, 0x00, 0x00, 0xed, 0xef, 0x8b, 0xa9, 0x79, 0xd6, 0x4a, 0xce, 0xa3, 0xc8, 0x27, 0xdc, 0xd5, 0x1d, 0x21, 0xed, 0x00, 0x00, 0x00, 0x04, 0x08, 0x01, 0x12, 0x00]);
-      log('GENERATE_REQUEST', 'Triggering license request with dummy PSSH');
-      await session.generateRequest('cenc', initData);
+      log('GENERATE_REQUEST', `Triggering license request (${keySystem})`);
+      if (isClearKey) {
+        // Use keyids init data — dummy kid to trigger the message event
+        const kid = new Uint8Array(16);
+        crypto.getRandomValues(kid);
+        const kidB64 = btoa(String.fromCharCode(...kid)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+        const initData = new TextEncoder().encode(JSON.stringify({ kids: [kidB64], type: 'temporary' }));
+        await session.generateRequest('keyids', initData);
+      } else {
+        // Widevine dummy PSSH
+        const initData = new Uint8Array([0x00,0x00,0x00,0x24,0x70,0x73,0x73,0x68,0x00,0x00,0x00,0x00,0xed,0xef,0x8b,0xa9,0x79,0xd6,0x4a,0xce,0xa3,0xc8,0x27,0xdc,0xd5,0x1d,0x21,0xed,0x00,0x00,0x00,0x04,0x08,0x01,0x12,0x00]);
+        await session.generateRequest('cenc', initData);
+      }
 
     } catch (e) {
       log('MANUAL_EME_ERROR', e.message);
     }
   }
+
+  window.addEventListener('DOMContentLoaded', () => {
+    const assetID = new URLSearchParams(window.location.search).get('asset_id');
+    if (assetID) {
+      document.getElementById('asset-id').value = assetID;
+    }
+    checkApiHealth();
+  });
 </script>
 </body>
 </html>

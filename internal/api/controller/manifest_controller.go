@@ -40,6 +40,7 @@ func (c *ManifestController) GetHLS(w http.ResponseWriter, r *http.Request) {
 		AssetID:    assetID,
 		Codec:      r.URL.Query().Get("codec"),
 		Resolution: r.URL.Query().Get("resolution"),
+		DRM:        r.URL.Query().Get("drm"),
 	}
 
 	maxBandwidthStr := r.URL.Query().Get("maxBandwidth")
@@ -81,6 +82,7 @@ func (c *ManifestController) GetDASH(w http.ResponseWriter, r *http.Request) {
 		AssetID:    assetID,
 		Codec:      r.URL.Query().Get("codec"),
 		Resolution: r.URL.Query().Get("resolution"),
+		DRM:        r.URL.Query().Get("drm"),
 	}
 
 	maxBandwidthStr := r.URL.Query().Get("maxBandwidth")

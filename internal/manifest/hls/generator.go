@@ -5,8 +5,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/anupam-chopra/prism/internal/config"
+	"github.com/anupam-chopra/prism/internal/media"
 	"github.com/anupam-chopra/prism/internal/model"
 )
 
@@ -21,6 +23,24 @@ func NewGenerator(cfg *config.Config, logger *slog.Logger) *Generator {
 
 func (g *Generator) Generate(ctx context.Context, req *model.ManifestRequest) ([]byte, error) {
 	g.logger.DebugContext(ctx, "generating HLS manifest", "asset_id", req.AssetID)
+
+	if g.cfg.MediaRoot != "" {
+		if req.DRM == media.DRMModeFairPlay {
+			localManifest := media.FairPlayHLSManifestPath(g.cfg.MediaRoot, req.AssetID)
+			if manifestBytes, err := os.ReadFile(localManifest); err == nil {
+				return manifestBytes, nil
+			} else if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("read local FairPlay HLS manifest: %w", err)
+			}
+		}
+
+		localManifest := media.HLSManifestPath(g.cfg.MediaRoot, req.AssetID)
+		if manifestBytes, err := os.ReadFile(localManifest); err == nil {
+			return manifestBytes, nil
+		} else if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("read local HLS manifest: %w", err)
+		}
+	}
 
 	asset := &model.Asset{
 		ID:         req.AssetID,

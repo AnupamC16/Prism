@@ -6,9 +6,11 @@ import (
 	"encoding/xml"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/anupam-chopra/prism/internal/config"
+	"github.com/anupam-chopra/prism/internal/media"
 	"github.com/anupam-chopra/prism/internal/model"
 )
 
@@ -51,6 +53,33 @@ type mpdRepresentation struct {
 
 func (g *Generator) Generate(ctx context.Context, req *model.ManifestRequest) ([]byte, error) {
 	g.logger.DebugContext(ctx, "generating DASH manifest", "asset_id", req.AssetID)
+
+	if g.cfg.MediaRoot != "" {
+		if req.DRM == media.DRMModeClearKey {
+			localManifest := media.ClearKeyDASHManifestPath(g.cfg.MediaRoot, req.AssetID)
+			if manifestBytes, err := os.ReadFile(localManifest); err == nil {
+				return manifestBytes, nil
+			} else if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("read local ClearKey DASH manifest: %w", err)
+			}
+		}
+
+		if req.DRM == media.DRMModeWidevine {
+			localManifest := media.DRMDASHManifestPath(g.cfg.MediaRoot, req.AssetID)
+			if manifestBytes, err := os.ReadFile(localManifest); err == nil {
+				return manifestBytes, nil
+			} else if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("read local DRM DASH manifest: %w", err)
+			}
+		}
+
+		localManifest := media.DASHManifestPath(g.cfg.MediaRoot, req.AssetID)
+		if manifestBytes, err := os.ReadFile(localManifest); err == nil {
+			return manifestBytes, nil
+		} else if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("read local DASH manifest: %w", err)
+		}
+	}
 
 	asset := &model.Asset{
 		ID:         req.AssetID,

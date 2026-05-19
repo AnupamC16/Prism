@@ -44,3 +44,6 @@ summary.json
 # Build outputs
 dist/
 build/
+
+# Local processed media
+data/

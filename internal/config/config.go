@@ -46,6 +46,14 @@ type Config struct {
 	CertCacheTTL int
 	// Version is the current version of the application (env: VERSION, default: "1.0.0").
 	Version string
+	// MediaRoot is where uploaded and processed local media assets are stored (env: MEDIA_ROOT, default: "data/assets").
+	MediaRoot string
+	// FFmpegPath is the executable used for local video processing (env: FFMPEG_PATH, default: "ffmpeg").
+	FFmpegPath string
+	// ShakaPackagerPath is the executable used for local ClearKey DASH packaging (env: SHAKA_PACKAGER_PATH, default: "packager").
+	ShakaPackagerPath string
+	// PlayerDemoPath is the HTML demo file served at /demo (env: PLAYER_DEMO_PATH, default: "player/demo/index.html").
+	PlayerDemoPath string
 }
 
 // Load reads configuration from environment variables, applying defaults
@@ -66,6 +74,10 @@ func Load() (*Config, error) {
 		CloudFrontKeyPairID:  os.Getenv("CLOUDFRONT_KEY_PAIR_ID"),
 		CloudFrontPrivateKey: os.Getenv("CLOUDFRONT_PRIVATE_KEY"),
 		Version:              getEnvOrDefault("VERSION", "1.0.0"),
+		MediaRoot:            getEnvOrDefault("MEDIA_ROOT", "data/assets"),
+		FFmpegPath:           getEnvOrDefault("FFMPEG_PATH", "ffmpeg"),
+		ShakaPackagerPath:    getEnvOrDefault("SHAKA_PACKAGER_PATH", "packager"),
+		PlayerDemoPath:       getEnvOrDefault("PLAYER_DEMO_PATH", "player/demo/index.html"),
 	}
 
 	var missingVars []string
@@ -94,18 +106,13 @@ func Load() (*Config, error) {
 	if c.PlayReadyURL == "" {
 		missingVars = append(missingVars, "PLAYREADY_URL")
 	}
-	if c.CloudFrontDomain == "" {
-		missingVars = append(missingVars, "CLOUDFRONT_DOMAIN")
-	}
-	if c.CloudFrontKeyPairID == "" {
-		missingVars = append(missingVars, "CLOUDFRONT_KEY_PAIR_ID")
-	}
-	if c.CloudFrontPrivateKey == "" {
-		missingVars = append(missingVars, "CLOUDFRONT_PRIVATE_KEY")
-	}
 
 	if len(missingVars) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missingVars, ", "))
+	}
+
+	if err := validateCloudFrontConfig(c); err != nil {
+		return nil, err
 	}
 
 	var err error
@@ -180,18 +187,13 @@ func (c *Config) Validate() error {
 	if c.PlayReadyURL == "" {
 		missingVars = append(missingVars, "PLAYREADY_URL")
 	}
-	if c.CloudFrontDomain == "" {
-		missingVars = append(missingVars, "CLOUDFRONT_DOMAIN")
-	}
-	if c.CloudFrontKeyPairID == "" {
-		missingVars = append(missingVars, "CLOUDFRONT_KEY_PAIR_ID")
-	}
-	if c.CloudFrontPrivateKey == "" {
-		missingVars = append(missingVars, "CLOUDFRONT_PRIVATE_KEY")
-	}
 
 	if len(missingVars) > 0 {
 		return fmt.Errorf("missing required environment variables: %s", strings.Join(missingVars, ", "))
+	}
+
+	if err := validateCloudFrontConfig(c); err != nil {
+		return err
 	}
 
 	if len(c.JWTSecret) < 32 {
@@ -203,6 +205,32 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+func validateCloudFrontConfig(c *Config) error {
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{name: "CLOUDFRONT_DOMAIN", value: c.CloudFrontDomain},
+		{name: "CLOUDFRONT_KEY_PAIR_ID", value: c.CloudFrontKeyPairID},
+		{name: "CLOUDFRONT_PRIVATE_KEY", value: c.CloudFrontPrivateKey},
+	}
+
+	var configured, missing []string
+	for _, field := range fields {
+		if field.value == "" {
+			missing = append(missing, field.name)
+			continue
+		}
+		configured = append(configured, field.name)
+	}
+
+	if len(configured) == 0 || len(missing) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf("incomplete CloudFront configuration; set all or none of: %s", strings.Join(missing, ", "))
 }
 
 // getEnvOrDefault returns the value of an environment variable or a fallback default.

@@ -1,0 +1,56 @@
+services:
+  prism:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      PORT: ":8080"
+      LOG_LEVEL: "info"
+      REDIS_URL: "redis://redis:6379/0"
+      JWT_SECRET: "${JWT_SECRET:-change-me-to-something-secure-min-32-chars}"
+      TOKEN_TTL_SECONDS: "3600"
+      WIDEVINE_URL: "${WIDEVINE_URL:-https://widevine-license.example.com/license}"
+      WIDEVINE_API_KEY: "${WIDEVINE_API_KEY:-dev-widevine-api-key}"
+      FAIRPLAY_URL: "${FAIRPLAY_URL:-https://fairplay-license.example.com/license}"
+      FAIRPLAY_CERT_URL: "${FAIRPLAY_CERT_URL:-https://fairplay-license.example.com/cert}"
+      FAIRPLAY_SECRET: "${FAIRPLAY_SECRET:-dev-fairplay-secret}"
+      PLAYREADY_URL: "${PLAYREADY_URL:-https://playready-license.example.com/license}"
+      CLOUDFRONT_DOMAIN: "${CLOUDFRONT_DOMAIN:-}"
+      CLOUDFRONT_KEY_PAIR_ID: "${CLOUDFRONT_KEY_PAIR_ID:-}"
+      CLOUDFRONT_PRIVATE_KEY: "${CLOUDFRONT_PRIVATE_KEY:-}"
+      MANIFEST_CACHE_TTL: "30"
+      LICENSE_CACHE_TTL: "300"
+      CERT_CACHE_TTL: "3600"
+      MEDIA_ROOT: "/data/assets"
+      FFMPEG_PATH: "ffmpeg"
+      SHAKA_PACKAGER_PATH: "packager"
+      PLAYER_DEMO_PATH: "/app/player/demo/index.html"
+      VERSION: "1.0.0"
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./data/assets:/data/assets
+      - ./player/demo:/app/player/demo
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis-data:

@@ -13,6 +13,7 @@ type ManifestRequest struct {
 	Codec        string
 	MaxBandwidth int
 	Resolution   string
+	DRM          string
 }
 
 func ManifestFromHTTP(r *http.Request) (*ManifestRequest, error) {
@@ -20,6 +21,7 @@ func ManifestFromHTTP(r *http.Request) (*ManifestRequest, error) {
 		AssetID:    r.PathValue("id"),
 		Codec:      r.URL.Query().Get("codec"),
 		Resolution: r.URL.Query().Get("resolution"),
+		DRM:        r.URL.Query().Get("drm"),
 	}
 
 	if raw := r.URL.Query().Get("maxBandwidth"); raw != "" {
@@ -43,9 +45,10 @@ func (r *ManifestRequest) ToDomain() *model.ManifestRequest {
 		Codec:        r.Codec,
 		MaxBandwidth: r.MaxBandwidth,
 		Resolution:   r.Resolution,
+		DRM:          r.DRM,
 	}
 }
 
 func (r *ManifestRequest) FilterHash() string {
-	return fmt.Sprintf("%s:%d:%s", r.Codec, r.MaxBandwidth, r.Resolution)
+	return fmt.Sprintf("%s:%d:%s:%s", r.Codec, r.MaxBandwidth, r.Resolution, r.DRM)
 }

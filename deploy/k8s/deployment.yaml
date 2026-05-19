@@ -49,6 +49,9 @@ spec:
                 name: prism-config
             - secretRef:
                 name: prism-secrets
+          volumeMounts:
+            - name: media-assets
+              mountPath: /data/assets
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -100,3 +103,6 @@ spec:
             matchLabels:
               app.kubernetes.io/name: prism
               app.kubernetes.io/component: api
+      volumes:
+        - name: media-assets
+          emptyDir: {}

@@ -17,10 +17,11 @@ type ManifestRequest struct {
 	Codec        string // optional — filter by codec: avc1, hvc1, av01, mp4a
 	MaxBandwidth int    // optional — filter renditions above this bps
 	Resolution   string // optional — max resolution: 360p, 480p, 720p, 1080p, 2160p
+	DRM          string // optional — e.g. clearkey for encrypted local DASH
 }
 
 func (r *ManifestRequest) FilterHash() string {
-	return fmt.Sprintf("%s:%d:%s", r.Codec, r.MaxBandwidth, r.Resolution)
+	return fmt.Sprintf("%s:%d:%s:%s", r.Codec, r.MaxBandwidth, r.Resolution, r.DRM)
 }
 
 func ContainsString(slice []string, val string) bool {
@@ -32,11 +33,15 @@ func ContainsString(slice []string, val string) bool {
 	return false
 }
 
+func IsValidAssetID(assetID string) bool {
+	return assetIDRegex.MatchString(assetID)
+}
+
 func (r *ManifestRequest) Validate() error {
 	if r.AssetID == "" {
 		return NewValidationError("asset_id", "is required")
 	}
-	if !assetIDRegex.MatchString(r.AssetID) {
+	if !IsValidAssetID(r.AssetID) {
 		return NewValidationError("asset_id", "must match regex ^[a-zA-Z0-9-_]{1,128}$")
 	}
 
@@ -50,6 +55,9 @@ func (r *ManifestRequest) Validate() error {
 
 	if r.MaxBandwidth < 0 {
 		return NewValidationError("max_bandwidth", "must be positive")
+	}
+	if r.DRM != "" && r.DRM != "clearkey" && r.DRM != "widevine" && r.DRM != "fairplay" {
+		return NewValidationError("drm", "must be one of clearkey, widevine, fairplay when provided")
 	}
 
 	return nil

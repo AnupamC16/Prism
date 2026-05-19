@@ -18,6 +18,7 @@ import (
 )
 
 type CloudFront struct {
+	enabled    bool
 	domain     string
 	keyPairID  string
 	privateKey *rsa.PrivateKey
@@ -25,6 +26,13 @@ type CloudFront struct {
 }
 
 func NewCloudFront(cfg *config.Config, logger *slog.Logger) (*CloudFront, error) {
+	if cfg.CloudFrontDomain == "" && cfg.CloudFrontKeyPairID == "" && cfg.CloudFrontPrivateKey == "" {
+		if logger != nil {
+			logger.Warn("cloudfront signing disabled; manifest URIs will not be rewritten")
+		}
+		return &CloudFront{logger: logger}, nil
+	}
+
 	pemData := strings.ReplaceAll(cfg.CloudFrontPrivateKey, `\n`, "\n")
 	block, _ := pem.Decode([]byte(pemData))
 	if block == nil {
@@ -49,6 +57,7 @@ func NewCloudFront(cfg *config.Config, logger *slog.Logger) (*CloudFront, error)
 	}
 
 	return &CloudFront{
+		enabled:    true,
 		domain:     cfg.CloudFrontDomain,
 		keyPairID:  cfg.CloudFrontKeyPairID,
 		privateKey: rsaKey,
@@ -57,6 +66,10 @@ func NewCloudFront(cfg *config.Config, logger *slog.Logger) (*CloudFront, error)
 }
 
 func (c *CloudFront) SignURL(originalURL string, expires time.Time) (string, error) {
+	if !c.enabled {
+		return originalURL, nil
+	}
+
 	policy := fmt.Sprintf(
 		`{"Statement":[{"Resource":"%s","Condition":{"DateLessThan":{"AWS:EpochTime":%d}}}]}`,
 		originalURL,
@@ -78,6 +91,10 @@ func (c *CloudFront) SignURL(originalURL string, expires time.Time) (string, err
 }
 
 func (c *CloudFront) RewriteManifestURIs(ctx context.Context, manifest []byte, assetID string) ([]byte, error) {
+	if !c.enabled {
+		return manifest, nil
+	}
+
 	expiry := time.Now().UTC().Add(24 * time.Hour)
 	result := string(manifest)
 	lines := strings.Split(result, "\n")
@@ -88,6 +105,7 @@ func (c *CloudFront) RewriteManifestURIs(ctx context.Context, manifest []byte, a
 			strings.HasPrefix(uri, "#") ||
 			strings.HasPrefix(uri, "<") ||
 			strings.ContainsAny(uri, " \t") ||
+			strings.HasPrefix(uri, "/assets/") ||
 			strings.HasPrefix(uri, "http://") ||
 			strings.HasPrefix(uri, "https://") ||
 			strings.HasPrefix(uri, "data:") ||
